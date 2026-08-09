@@ -1,0 +1,71 @@
+## @file
+#  Automatically rolls the Microsoft default Secure Boot keys embedded in the
+#  FV (via *Default variables written by SecureBootDefaultKeysDxe) into the
+#  actual PK / KEK / db / dbx / dbt authenticated variables and flips the
+#  "Attempt Secure Boot" checkbox in the SecureBootConfigDxe menu to ON, all
+#  on the first boot of a clean (PK-less) variable store. Subsequent boots and
+#  user-changed key sets are left untouched.
+#
+#  This reproduces exactly what the SecureBootConfigDxe "Reset to defaults"
+#  menu action does, so the user no longer has to enter the UEFI setup menu
+#  on every fresh boot to enable Secure Boot.
+#
+#  Copyright (c) 2024, Collabora Ltd.
+#  Portions Copyright (C) Microsoft Corporation. All rights reserved.
+#  Portions Copyright (C) DuoWoA authors. All rights reserved.
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001C
+  BASE_NAME                      = SecureBootProvisioningDxe
+  FILE_GUID                      = f231a759-39e7-44bd-9e4f-ebd8a6146f03
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.1
+  ENTRY_POINT                    = SecureBootProvisioningDxeEntryPoint
+
+[Sources]
+  SecureBootProvisioningDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  SecurityPkg/SecurityPkg.dec
+  CryptoPkg/CryptoPkg.dec
+  GunyahPkg/GunyahPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseCryptLib
+  BaseMemoryLib
+  DebugLib
+  DxeServicesLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+  SecureBootVariableLib
+  SecureBootVariableProvisionLib
+
+[Guids]
+  gEfiGlobalVariableGuid
+  gEfiCustomModeEnableGuid
+  gEfiSecureBootEnableDisableGuid
+  gEfiAuthenticatedVariableGuid
+
+#
+# Wait until both the Variable and Variable Write architectural protocols are
+# available: we need both to enroll authenticated variables and to write the
+# SecureBootEnable switch. SecureBootDefaultKeysDxe uses the exact same Depex,
+# and once it has dispatched the *Default variables are populated; the DXE
+# dispatcher re-runs Depex evaluation so whenever this driver becomes ready
+# the *Default keys will already be there for Enroll*FromDefault() to read.
+#
+[Depex]
+  gEfiVariableArchProtocolGuid      AND
+  gEfiVariableWriteArchProtocolGuid
+
+[Pcd]
+  gGunyahTokenSpaceGuid.PcdSiPolicyFileGuid

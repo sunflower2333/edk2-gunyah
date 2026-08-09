@@ -59,6 +59,63 @@ READ_LOCK_STATUS   = TRUE
 !else
   INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
 !endif
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  INF SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
+  INF SecurityPkg/VariableAuthenticated/SecureBootDefaultKeysDxe/SecureBootDefaultKeysDxe.inf
+  INF GunyahPkg/Drivers/SecureBootProvisioningDxe/SecureBootProvisioningDxe.inf
+
+  #
+  # Microsoft default Secure Boot keys, embedded into the FV as FREEFORM
+  # FFS files. The GUIDs are gDefaultPKFileGuid / gDefaultKEKFileGuid /
+  # gDefaultdbFileGuid / gDefaultdbxFileGuid defined in SecurityPkg.dec.
+  # SecureBootDefaultKeysDxe reads these RAW sections and provisions the
+  # corresponding PKDefault/KEKDefault/dbDefault/dbxDefault variables on
+  # first boot. The user can later override via the Secure Boot Configuration
+  # menu (Custom mode > PK/KEK/db/dbx > Enroll from file).
+  #
+  #   PK   - RiscVVirt test self-signed Platform Key (replace with your own
+  #          PK for production key interchange).
+  #   KEK  - Microsoft Corporation KEK CA 2011 + Microsoft Corporation KEK
+  #          2K CA 2023. Keeping both permits legacy and current Microsoft
+  #          signature database updates during the certificate transition.
+  #   db   - Legacy compatibility: Microsoft Windows Production PCA 2011 and
+  #          Microsoft Corporation UEFI CA 2011.
+  #          Current trust: Windows UEFI CA 2023, Microsoft UEFI CA 2023, and
+  #          Microsoft Option ROM UEFI CA 2023.
+  #   dbx  - UEFI revocation list (revoked hashes/certs).
+  #
+  FILE FREEFORM = 85254ea7-4759-4fc4-82d4-5eed5fb0a4a0 {
+    SECTION RAW = GunyahPkg/SecureBootKeys/PK/PK.cer
+  }
+
+  FILE FREEFORM = 6f64916e-9f7a-4c35-b952-cd041efb05a3 {
+    SECTION RAW = GunyahPkg/SecureBootKeys/KEK/MicCorKEKCA2011_2011-06-24.crt
+    SECTION RAW = GunyahPkg/SecureBootKeys/KEK/microsoft_corporation_kek_2k_ca_2023.der
+  }
+
+  FILE FREEFORM = c491d352-7623-4843-accc-2791a7574421 {
+    SECTION RAW = GunyahPkg/SecureBootKeys/db/MicWinProPCA2011_2011-10-19.crt
+    SECTION RAW = GunyahPkg/SecureBootKeys/db/windows_uefi_ca_2023.der
+    SECTION RAW = GunyahPkg/SecureBootKeys/db/MicCorUEFCA2011_2011-06-27.crt
+    SECTION RAW = GunyahPkg/SecureBootKeys/db/microsoft_uefi_ca_2023.der
+    SECTION RAW = GunyahPkg/SecureBootKeys/db/microsoft_option_rom_uefi_ca_2023.der
+  }
+
+  FILE FREEFORM = 5740766a-718e-4dc0-9935-c36f7d3f884f {
+    SECTION RAW = GunyahPkg/SecureBootKeys/dbx/dbxupdate_x64.bin
+  }
+
+  #
+  # Default Windows WDAC System Integrity Policy (SiPolicy.p7b).
+  # SecureBootProvisioningDxe reads this FREEFORM RAW section from the FV
+  # and writes it to \EFI\Microsoft\Boot\SiPolicy.p7b on the ESP when
+  # Secure Boot is ON. This enables Windows self-signed drivers.
+  #
+  FILE FREEFORM = PCD(gGunyahTokenSpaceGuid.PcdSiPolicyFileGuid) {
+    SECTION RAW = GunyahPkg/Include/Resources/SecureBoot/SystemIntegrity/SiPolicy.p7b
+    SECTION UI = "System Integrity Policy"
+  }
+!endif
   INF MdeModulePkg/Universal/MonotonicCounterRuntimeDxe/MonotonicCounterRuntimeDxe.inf
   INF MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf
   INF EmbeddedPkg/RealTimeClockRuntimeDxe/RealTimeClockRuntimeDxe.inf
@@ -105,7 +162,31 @@ READ_LOCK_STATUS   = TRUE
   INF OvmfPkg/VirtioSerialDxe/VirtioSerial.inf
   INF GunyahPkg/Drivers/GunyahVirtioKeyboardDxe/GunyahVirtioKeyboard.inf
 
-!include OvmfPkg/Include/Fdf/ShellDxe.fdf.inc
+#
+# Shell + dynamic commands.
+#
+# Upstream OvmfPkg's ShellDxe.fdf.inc gates Shell on
+#   $(BUILD_SHELL) == TRUE && $(SECURE_BOOT_ENABLE) == FALSE
+# which intentionally drops Shell from production Secure Boot firmware
+# (Shell can load arbitrary UEFI binaries).  For this development / test
+# platform we want Shell available even with Secure Boot enabled, so we
+# inline the same INF list here and drop the SECURE_BOOT_ENABLE condition,
+# keeping only BUILD_SHELL as the gate.  The DSC side
+# (OvmfPkg/Include/Dsc/ShellComponents.dsc.inc) already builds Shell
+# unconditionally on BUILD_SHELL, so the binary exists regardless; this
+# block controls only whether it gets packaged into FVMAIN.
+#
+!if $(BUILD_SHELL) == TRUE
+!if $(TOOL_CHAIN_TAG) != "XCODE5"
+!if $(NETWORK_ENABLE) == TRUE
+  INF  ShellPkg/DynamicCommand/TftpDynamicCommand/TftpDynamicCommand.inf
+  INF  ShellPkg/DynamicCommand/HttpDynamicCommand/HttpDynamicCommand.inf
+!endif
+  INF  ShellPkg/DynamicCommand/VariablePolicyDynamicCommand/VariablePolicyDynamicCommand.inf
+  INF  OvmfPkg/LinuxInitrdDynamicShellCommand/LinuxInitrdDynamicShellCommand.inf
+!endif
+  INF  ShellPkg/Application/Shell/Shell.inf
+!endif
 
   #
   # Bds

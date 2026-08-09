@@ -1,0 +1,11 @@
+target/
+target.tmp/
+**/__pycache__
+**/*.rs.bk
+**/*.sw[po]
+**/*.orig
+**/*.pyc
+lcov.info
+.idea
+.vscode/*
+!.vscode/settings.json

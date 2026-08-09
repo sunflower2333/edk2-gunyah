@@ -37,6 +37,14 @@
   ## PL030 RealTimeClock
   gGunyahTokenSpaceGuid.PcdPL030RtcPpmAccuracy|300000000|UINT32|0x00000001
 
+  #
+  # GUID of the FREEFORM FFS file that contains the default Windows WDAC
+  # System Integrity Policy (SiPolicy.p7b).  SecureBootProvisioningDxe reads
+  # this FFS file from the FV and writes it to \EFI\Microsoft\Boot\SiPolicy.p7b
+  # on the ESP when Secure Boot is ON.
+  #
+  gGunyahTokenSpaceGuid.PcdSiPolicyFileGuid|{0x6a,0x8d,0xf9,0xda,0xe4,0x6b,0x60,0x4b,0xb8,0x97,0x4f,0x16,0xe4,0x58,0x62,0x58}|VOID*|0x00000002
+
 [PcdsDynamic.common]
   ## PL030 RealTimeClock
   gGunyahTokenSpaceGuid.PcdPL030RtcBase|0x0|UINT32|0x00000000

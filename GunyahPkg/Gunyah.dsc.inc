@@ -128,6 +128,20 @@
 
   XenIoMmioLib|OvmfPkg/Library/XenIoMmioLib/XenIoMmioLib.inf
 
+  #
+  # CryptoPkg libraries needed by multiple firmware features
+  #
+  IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
+!if ($(NETWORK_TLS_ENABLE) == TRUE) || ($(SECURE_BOOT_ENABLE) == TRUE)
+  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLib.inf
+!else
+  OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
+!endif
+  BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
+!if ($(NETWORK_TLS_ENABLE) == TRUE) || ($(SECURE_BOOT_ENABLE) == TRUE)
+  TlsLib|CryptoPkg/Library/TlsLib/TlsLib.inf
+!endif
+
   RngLib|MdePkg/Library/BaseRngLib/BaseRngLib.inf
   ArmTrngLib|ArmPkg/Library/ArmTrngLib/ArmTrngLib.inf
   ArmMonitorLib|ArmPkg/Library/ArmMonitorLib/ArmMonitorLib.inf
@@ -135,7 +149,19 @@
   #
   # Secure Boot dependencies
   #
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  AuthVariableLib|SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
+  SecureBootVariableLib|SecurityPkg/Library/SecureBootVariableLib/SecureBootVariableLib.inf
+  SecureBootVariableProvisionLib|SecurityPkg/Library/SecureBootVariableProvisionLib/SecureBootVariableProvisionLib.inf
+  PlatformPKProtectionLib|SecurityPkg/Library/PlatformPKProtectionLibVarPolicy/PlatformPKProtectionLibVarPolicy.inf
+
+  # re-use the UserPhysicalPresent() dummy implementation from the ovmf tree
+  # (always returns TRUE - matches the VM use case where the local user is
+  #  considered physically present at the serial/graphical console)
+  PlatformSecureLib|OvmfPkg/Library/PlatformSecureLib/PlatformSecureLib.inf
+!else
   AuthVariableLib|MdeModulePkg/Library/AuthVariableLibNull/AuthVariableLibNull.inf
+!endif
   VarCheckLib|MdeModulePkg/Library/VarCheckLib/VarCheckLib.inf
   VariableFlashInfoLib|MdeModulePkg/Library/BaseVariableFlashInfoLib/BaseVariableFlashInfoLib.inf
   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLib.inf
@@ -228,6 +254,15 @@
   DebugLib|MdePkg/Library/BaseDebugLibSerialPort/BaseDebugLibSerialPort.inf
 !endif
   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLibRuntimeDxe.inf
+  #
+  # Runtime-safe crypto library for DXE_RUNTIME_DRIVER modules. The plain
+  # BaseCryptLib.inf has MODULE_TYPE = DXE_DRIVER and so cannot be linked into
+  # runtime drivers (VariableRuntimeDxe + AuthVariableLib when Secure Boot is
+  # on). RuntimeCryptLib.inf is the runtime-capable variant that mirrors the
+  # ArmVirt.dsc.inc layout. Linked unconditionally because the cost is zero
+  # when no runtime driver actually pulls in BaseCryptLib.
+  #
+  BaseCryptLib|CryptoPkg/Library/BaseCryptLib/RuntimeCryptLib.inf
 
 [LibraryClasses.ARM]
   RngLib|MdePkg/Library/BaseRngLibTimerLib/BaseRngLibTimerLib.inf
@@ -324,9 +359,17 @@
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiACPIReclaimMemory|0
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiACPIMemoryNVS|0
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiReservedMemoryType|0
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  # Secure Boot variable services (AuthVariableLib + signature databases) need
+  # more runtime memory than the Null implementation. Match ArmVirt values.
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiRuntimeServicesData|600
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiRuntimeServicesCode|400
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiBootServicesCode|1500
+!else
+  gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiRuntimeServicesData|300
+  gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiRuntimeServicesCode|150
+  gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiBootServicesCode|1000
+!endif
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiBootServicesData|12000
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiLoaderCode|20
   gEmbeddedTokenSpaceGuid.PcdMemoryTypeEfiLoaderData|0
@@ -347,6 +390,18 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdDxeNxMemoryProtectionPolicy|0xC000000000007FD5
 
   gEfiMdeModulePkgTokenSpaceGuid.PcdCpuStackGuard|TRUE
+
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  #
+  # Override the default values from SecurityPkg to ensure images from all
+  # sources (option ROM, fixed media, removable media) are verified against
+  # the Secure Boot signature databases. 0x04 = DENY execution if not signed
+  # by a trusted key. Aligns with RiscVVirt / ArmVirt non-SMM Secure Boot.
+  #
+  gEfiSecurityPkgTokenSpaceGuid.PcdOptionRomImageVerificationPolicy   |0x04
+  gEfiSecurityPkgTokenSpaceGuid.PcdFixedMediaImageVerificationPolicy  |0x04
+  gEfiSecurityPkgTokenSpaceGuid.PcdRemovableMediaImageVerificationPolicy|0x04
+!endif
 
 [Components.common]
   #

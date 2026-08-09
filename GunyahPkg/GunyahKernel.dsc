@@ -31,6 +31,74 @@
   DEFINE QEMU_PV_VARS            = FALSE
 
   #
+  # Non-volatile variable store backing:
+  #   TRUE (default)  - use the *emulated* in-RAM variable store. The
+  #                     variables work during a single boot but are **never
+  #                     persisted** across reboots; on the next power cycle the
+  #                     UEFI variable space is reset to the freshly-built
+  #                     GUNYAH_VARS.fd content (i.e. an empty boot-order and
+  #                     the freshly-reprovisioned Microsoft default keys).
+  #
+  #                     This is the only mode that actually works on the
+  #                     Droid-VM/crosvm fork today: although that fork accepts
+  #                     a `--pflash path=...,block_size=...` CLI flag, on
+  #                     aarch64 the `components.pflash_image` field is never
+  #                     consumed by `aarch64/src/lib.rs::build_vm`, so no MMIO
+  #                     window is created and no DT `cfi-flash` node is emitted
+  #                     (verified by diffing the dumped DTB with/without the
+  #                     flag). With `VirtNorFlashDxe` left without any NOR
+  #                     flash instance, no FVB protocol is installed and
+  #                     `VariableRuntimeDxe` (and the DXE drivers that depend
+  #                     on the Variable arch protocol - Bds, Capsule,
+  #                     MonotonicCounter, RTC) can never be dispatched, which
+  #                     trips `DxeMain.c(578) ASSERT_EFI_ERROR (Not Found)`.
+  #
+  #                     Choose this default until the crosvm fork is patched
+  #                     to (a) wire `Pflash::new()` + `mmio_bus.insert()` from
+  #                     `aarch64/src/lib.rs` and (b) emit a `compatible =
+  #                     "cfi-flash"` DT node describing the window, so that
+  #                     `FdtNorFlashQemuLib` can claim it (and the Pflash
+  #                     device is taught the minimal CFI query commands, since
+  #                     `devices/src/pflash.rs` currently ships *no* CFI
+  #                     tables).
+  #
+  #   FALSE           - use the *real* NOR flash backed variable store. The
+  #                     firmware reaches `VirtNorFlashDxe` + FTW through the
+  #                     DT `cfi-flash` node, so variable writes persist across
+  #                     guest power cycles. Only use this with a VMM that
+  #                     actually exposes a `cfi-flash` DT node (QEMU with
+  #                     `-pflash ...`, or crosvm once the aarch64 pflash
+  #                     support is landed).
+  #                         ./build.sh -D EMU_VARIABLE_NV_MODE=FALSE
+  #
+  DEFINE EMU_VARIABLE_NV_MODE   = TRUE
+
+  #
+  # Secure Boot:
+  #   TRUE (default)  - builds authenticated variable services, hooks
+  #                     DxeImageVerificationLib into SecurityStubDxe, adds the
+  #                     SecureBootConfigDxe setup menu (Secure Boot on/off switch
+  #                     + PK/KEK/db/dbx/dbt key management) and embeds the
+  #                     Microsoft default keys (PK/KEK/db/dbx) which
+  #                     SecureBootDefaultKeysDxe provisions on first boot.
+  #
+  #                     The actual Secure Boot enforcement state remains under
+  #                     the user's control at boot time via the UEFI setup menu
+  #                     entry "Secure Boot Configuration > Attempt Secure Boot":
+  #                     it is OFF by default, and toggling it requires an explicit
+  #                     "Attempt Secure Boot" checkbox, a "Secure Boot Mode"
+  #                     oneof (Standard/Custom), per-database Enroll/Delete under
+  #                     Custom mode, and a "Reset to defaults" entry. The
+  #                     Microsoft default keys can be re-applied at any time via
+  #                     "Reset to defaults".
+  #
+  #   FALSE           - rebuild without Secure Boot support entirely (smaller
+  #                     FV footprint, no setup menu entry), e.g.
+  #                     `./build.sh -D SECURE_BOOT_ENABLE=FALSE`.
+  #
+  DEFINE SECURE_BOOT_ENABLE      = TRUE
+
+  #
   # Network definition
   #
   DEFINE NETWORK_IP6_ENABLE              = FALSE
@@ -206,9 +274,21 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingSize | 0x40000
 
   #
-  # Make VariableRuntimeDxe work at emulated non-volatile variable mode.
+  # Tie VariableRuntimeDxe's emulated-vs-real NVRAM mode to the
+  # EMU_VARIABLE_NV_MODE define above. When TRUE (the default, since the
+  # Droid-VM/crosvm fork doesn't currently expose a `cfi-flash` DT node on
+  # aarch64), VariableRuntimeDxe initializes an in-RAM emulated NVRAM and the
+  # fault-tolerant write layer is a no-op - variables work within a single
+  # boot but the store resets to GUNYAH_VARS.fd on the next cold boot. When
+  # FALSE, VariableRuntimeDxe uses the real NOR flash discovered via the
+  # DT `cfi-flash` node, so variables persist across reboots. Only switch to
+  # FALSE if your VMM actually exposes a `cfi-flash` node.
   #
+!if $(EMU_VARIABLE_NV_MODE) == TRUE
   gEfiMdeModulePkgTokenSpaceGuid.PcdEmuVariableNvModeEnable|TRUE
+!else
+  gEfiMdeModulePkgTokenSpaceGuid.PcdEmuVariableNvModeEnable|FALSE
+!endif
 
 [PcdsPatchableInModule.common]
   # we need to provide a resolution for this PCD that supports PcdSet64()
@@ -348,7 +428,43 @@
       BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
   }
 !endif
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  #
+  # Hook DxeImageVerificationLib into SecurityStubDxe so that every PE/COFF
+  # image loaded during DXE is verified against the Secure Boot signature
+  # databases (db/dbx/KEK/PK) when Secure Boot is active.
+  #
+  MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf {
+    <LibraryClasses>
+      NULL|SecurityPkg/Library/DxeImageVerificationLib/DxeImageVerificationLib.inf
+  }
+  #
+  # SecureBootConfigDxe provides the UEFI setup menu entry "Secure Boot
+  # Configuration": the Attempt Secure Boot on/off checkbox, Standard/Custom
+  # mode oneof, and per-database (PK/KEK/db/dbx/dbt) "enroll from file" forms.
+  #
+  SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
+  #
+  # SecureBootDefaultKeysDxe provisions the Microsoft default keys (PK/KEK/db/
+  # dbx) into the corresponding *Default variables on first boot, when those
+  # variables do not yet exist. The actual certificate payloads are embedded
+  # into the firmware volume via FFS FREEFORM files (see GunyahFvMain.fdf.inc).
+  #
+  SecurityPkg/VariableAuthenticated/SecureBootDefaultKeysDxe/SecureBootDefaultKeysDxe.inf
+  #
+  # SecureBootProvisioningDxe auto-rolls the *Default keys above into the
+  # real PK/KEK/db/dbx/dbt authenticated variables and flips the SecureBoot
+  # menu "Attempt Secure Boot" checkbox to ON, on the first boot only (when
+  # no PK exists yet). This reproduces what the menu's "Reset to default
+  # keys" button does so the user does not have to enter the setup menu and
+  # trigger it manually each time the EmuVar store is recreated. On later
+  # boots (PK already present), it's a no-op and the user keeps full control
+  # to enroll their own keys from the menu.
+  #
+  GunyahPkg/Drivers/SecureBootProvisioningDxe/SecureBootProvisioningDxe.inf
+!else
   MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
+!endif
   MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf
   MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf {
     <LibraryClasses>
